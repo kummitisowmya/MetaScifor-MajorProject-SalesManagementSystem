@@ -9,85 +9,14 @@ from datetime import datetime
 from .forms import CustomUserCreationForm, TrainingClassForm
 from .models import Student, Payment, PendingPayment, SalesPerson, TrainingClass
 from django.contrib import messages
-
+from django.core.mail import send_mail
 # Sales Home View
 @login_required
 def sales_home(request):
     return render(request, "sales/home.html")
 
 # Admin Dashboard
-# @login_required
-# def admin_dashboard(request):
-#     # Ensure only admin users can access this view
-#     if not request.user.role == 'admin':
-#         return redirect('home')
-#
-#     # Get filter parameters from the request
-#     start_date = request.GET.get('start_date')
-#     end_date = request.GET.get('end_date')
-#
-#     # Convert dates to datetime objects
-#     if start_date:
-#         start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
-#     if end_date:
-#         end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
-#
-#     # Fetch data with filters
-#     total_students = Student.objects.filter(is_enrolled=True).count()  # Only count fully enrolled students
-#     total_collected = Payment.objects.aggregate(total=Sum('amount_paid'))['total'] or 0
-#     total_pending = PendingPayment.objects.aggregate(total=Sum('due_amount'))['total'] or 0
-#
-#     # Filter sales data by date range
-#     sales_data = SalesPerson.objects.annotate(total_collection=Sum('payment__amount_paid'))
-#     if start_date and end_date:
-#         sales_data = sales_data.filter(payment__payment_date__range=[start_date, end_date])
-#
-#     # Prepare data for the bar chart
-#     salespersons = [sales.user.get_full_name() or sales.user.username for sales in sales_data if sales.user.role == 'sales']
-#     collections = [float(sales.total_collection or 0) for sales in sales_data]
-#
-#     # Filter students based on the date range for the pie chart
-#     students = Student.objects.filter(is_enrolled=True)  # Only include fully enrolled students
-#     if start_date and end_date:
-#         students = students.filter(payment__payment_date__range=[start_date, end_date])
-#
-#     # Calculate payment status counts for the pie chart
-#     paid_count = students.filter(payment_status='paid').count()
-#     pending_count = students.filter(payment_status='pending').count()
-#     not_updated_count = students.filter(payment_status='not_updated').count()
-#
-#     # Fetch pending payments
-#     pending_payments = PendingPayment.objects.filter(due_amount__gt=0)
-#
-#     # Fetch student progress data (only for fully enrolled students)
-#     student_progress = []
-#     for student in Student.objects.filter(is_enrolled=True):  # Only include fully enrolled students
-#         total_paid = Payment.objects.filter(student=student).aggregate(total=Sum('amount_paid'))['total'] or 0
-#         progress = (total_paid / student.total_fees) * 100 if student.total_fees > 0 else 0
-#         student_progress.append({
-#             "name": student.name,
-#             "training_class": student.training_class.name,
-#             "total_fees": student.total_fees,
-#             "total_paid": total_paid,
-#             "progress": round(progress, 2),  # Round to 2 decimal places
-#         })
-#
-#     context = {
-#         'total_students': total_students,
-#         'total_collected': total_collected,
-#         'total_pending': total_pending,
-#         'sales_data': sales_data,
-#         'salespersons': json.dumps(salespersons),  # Convert to JSON for Chart.js
-#         'collections': json.dumps(collections),    # Convert to JSON for Chart.js
-#         'paid_count': paid_count,
-#         'pending_count': pending_count,
-#         'not_updated_count': not_updated_count,
-#         'pending_payments': pending_payments,      # Pass pending payments to the template
-#         'student_progress': student_progress,      # Pass student progress to the template
-#         'start_date': start_date.strftime('%Y-%m-%d') if start_date else '',
-#         'end_date': end_date.strftime('%Y-%m-%d') if end_date else '',
-#     }
-#     return render(request, 'admin_dashboard.html', context)
+
 @login_required
 def admin_dashboard(request):
     if not request.user.role == 'admin':
@@ -105,11 +34,37 @@ def admin_dashboard(request):
 
     # Fetch data with filters
     total_students = Student.objects.filter(is_enrolled=True).count()  # Only count fully enrolled students
+    student_progress = []
+    for student in Student.objects.filter(is_enrolled=True):  # Only include fully enrolled students
+        total_paid = Payment.objects.filter(student=student).aggregate(total=Sum('amount_paid'))['total'] or 0
+        progress = (total_paid / student.total_fees) * 100 if student.total_fees > 0 else 0
+        student_progress.append({
+            "name": student.name,
+            "training_class": student.training_class.name,
+            "total_fees": student.total_fees,
+            "total_paid": total_paid,
+            "progress": round(progress, 2),  # Round to 2 decimal places
+        })
 
     # Apply date range filter to total_collected
     payments = Payment.objects.all()
+
     if start_date and end_date:
+        student_data = Student.objects.all()
         payments = payments.filter(payment_date__range=[start_date, end_date])
+        total_students = student_data.filter(joined_date__range=[start_date, end_date]).filter(is_enrolled=True).count()
+        total_students_data = student_data.filter(joined_date__range=[start_date, end_date]).filter(is_enrolled=True)
+        student_progress = []
+        for student in total_students_data:  # Only include fully enrolled students
+            total_paid = Payment.objects.filter(student=student).aggregate(total=Sum('amount_paid'))['total'] or 0
+            progress = (total_paid / student.total_fees) * 100 if student.total_fees > 0 else 0
+            student_progress.append({
+                "name": student.name,
+                "training_class": student.training_class.name,
+                "total_fees": student.total_fees,
+                "total_paid": total_paid,
+                "progress": round(progress, 2),  # Round to 2 decimal places
+            })
 
     total_collected = payments.aggregate(total=Sum('amount_paid'))['total'] or 0
 
@@ -119,15 +74,6 @@ def admin_dashboard(request):
         pending_payments = pending_payments.filter(student__payment__payment_date__range=[start_date, end_date]).distinct()
 
     total_pending = pending_payments.aggregate(total=Sum('due_amount'))['total'] or 0
-
-    # Filter sales data by date range
-    # sales_data = SalesPerson.objects.annotate(
-    #     total_collection=Sum(
-    #         'payment__amount_paid',
-    #         filter=Q(payment__payment_date__range=[start_date, end_date]) if start_date and end_date else Q(),
-    #         distinct=True
-    #     )
-    # )
 
     sales_data = SalesPerson.objects.all().annotate(
         total_collection=Sum(
@@ -154,17 +100,7 @@ def admin_dashboard(request):
     pending_payments = PendingPayment.objects.filter(due_amount__gt=0)
 
     # Fetch student progress data (only for fully enrolled students)
-    student_progress = []
-    for student in Student.objects.filter(is_enrolled=True):  # Only include fully enrolled students
-        total_paid = Payment.objects.filter(student=student).aggregate(total=Sum('amount_paid'))['total'] or 0
-        progress = (total_paid / student.total_fees) * 100 if student.total_fees > 0 else 0
-        student_progress.append({
-            "name": student.name,
-            "training_class": student.training_class.name,
-            "total_fees": student.total_fees,
-            "total_paid": total_paid,
-            "progress": round(progress, 2),  # Round to 2 decimal places
-        })
+
 
     context = {
         'total_students': total_students,
@@ -258,8 +194,17 @@ def enroll_student(request):
                 salesperson=salesperson,
                 is_enrolled=True  # Mark as fully enrolled
             )
+            subject = "Enrollment Confirmation"
+            message = f"Hello {name},\n\nYou have been successfully enrolled for {training_class.name} course. Your total fee is {total_fees}.\ntraining details:\nstart_date - {training_class.start_date}\n end_date- {training_class.end_date} \nBest regards,\nTraining Team"
 
-            messages.success(request, f"Student {name} enrolled successfully!")
+            from_email = "jsreddychanda123@gmail.com"  # Replace with your email
+            recipient_list = [email]
+
+            send_mail(subject, message, from_email, recipient_list, fail_silently=False)
+
+            messages.success(request, f"Student {name} enrolled successfully! A confirmation email has been sent.")
+
+            #messages.success(request, f"Student {name} enrolled successfully!")
             return redirect("sales_dashboard")
 
         except TrainingClass.DoesNotExist:
@@ -279,71 +224,6 @@ def enroll_student(request):
     }
     return render(request, "sales/enroll_student.html", context)
 
-# Record Payment
-# @login_required
-# def record_payment(request, student_id):
-#     student = get_object_or_404(Student, id=student_id)
-#     salesperson = get_object_or_404(SalesPerson, user=request.user)
-#     pending_payment = PendingPayment.objects.filter(student=student).first()
-#     pending_amount = pending_payment.due_amount if pending_payment else student.total_fees
-#
-#     if request.method == "POST":
-#         try:
-#             amount_paid = Decimal(request.POST.get("amount_paid"))
-#             payment_status = request.POST.get("payment_status")  # 'full' or 'partial'
-#
-#             # Validate the amount paid
-#             if amount_paid <= 0:
-#                 messages.error(request, "Amount paid must be greater than zero.")
-#                 return redirect("record_payment", student_id=student.id)
-#             if amount_paid > student.total_fees:
-#                 messages.error(request, "Amount paid cannot be greater than the total fees.")
-#                 return redirect("record_payment", student_id=student.id)
-#
-#             # Save Payment
-#             Payment.objects.create(student=student, collected_by=salesperson, amount_paid=amount_paid)
-#
-#             if payment_status == "full" or amount_paid >= pending_amount:
-#                 # Mark as fully paid
-#                 student.payment_status = 'paid'
-#                 student.save()  # Save the updated payment status
-#                 # Clear any pending payment for the student
-#                 PendingPayment.objects.filter(student=student).delete()
-#                 messages.success(request, f"Payment of ₹{amount_paid} recorded. {student.name} is now fully paid.")
-#             else:
-#                 # Handle partial payment
-#                 if pending_payment:
-#                     pending_payment.due_amount -= amount_paid
-#                     if pending_payment.due_amount <= 0:
-#                         # If due amount is fully paid, delete the pending payment
-#                         pending_payment.delete()
-#                         student.payment_status = 'paid'
-#                         messages.success(request, f"Payment of ₹{amount_paid} recorded. {student.name} is now fully paid.")
-#                     else:
-#                         # Update the pending payment
-#                         pending_payment.save()
-#                         student.payment_status = 'pending'
-#                         messages.success(request, f"Payment of ₹{amount_paid} recorded. {student.name} has a pending amount of ₹{pending_payment.due_amount}.")
-#                 else:
-#                     # Create a new pending payment if it doesn't exist
-#                     PendingPayment.objects.create(student=student, due_amount=student.total_fees - amount_paid)
-#                     student.payment_status = 'pending'
-#                     messages.success(request, f"Payment of ₹{amount_paid} recorded. {student.name} has a pending amount of ₹{student.total_fees - amount_paid}.")
-#
-#                 # Save the updated payment status
-#                 student.save()
-#
-#             return redirect("sales_dashboard")
-#
-#         except Exception as e:
-#             messages.error(request, f"An error occurred: {str(e)}")
-#             return redirect("record_payment", student_id=student.id)
-#
-#     context = {
-#         "student": student,
-#         "pending_amount": pending_amount,
-#     }
-#     return render(request, "sales/record_payment.html", context)
 @login_required
 def record_payment(request, student_id):
     student = get_object_or_404(Student, id=student_id)
